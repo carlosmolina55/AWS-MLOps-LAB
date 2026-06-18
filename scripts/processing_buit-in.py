@@ -12,52 +12,73 @@ df = pd.read_csv(input_data_path)
 # A. Eliminar columnas que no aportan valor o son texto libre difícil de procesar
 df = df.drop(columns=['PassengerId', 'Name', 'Ticket', 'Cabin'], errors='ignore')
 
-# B. Imputar valores nulos (Missing values)
-# Rellenamos las edades nulas con la mediana de las edades
-df['Age'] = df['Age'].fillna(df['Age'].median())
-
-# Rellenamos la tarifa nula (si la hubiera) con la mediana
-if 'Fare' in df.columns:
-    df['Fare'] = df['Fare'].fillna(df['Fare'].median())
-
-# Rellenamos el puerto de embarque nulo con el valor más frecuente (moda)
-if 'Embarked' in df.columns:
-    df['Embarked'] = df['Embarked'].fillna(df['Embarked'].mode()[0])
-
-# C. Codificar variables categóricas
+# B. Codificar variables categóricas
 # Convertimos 'Sex' a valores binarios (0 y 1)
 if 'Sex' in df.columns:
     df['Sex'] = df['Sex'].map({'male': 0, 'female': 1})
 
-# One-Hot Encoding para 'Embarked' (Convierte el puerto en columnas numéricas separadas)
-if 'Embarked' in df.columns:
-    df = pd.get_dummies(df, columns=['Embarked'], drop_first=True)
-
-# D. Crear nueva variable: Tamaño de la familia
+# C. Crear nueva variable: Tamaño de la familia
 if 'SibSp' in df.columns and 'Parch' in df.columns:
     df['FamilySize'] = df['SibSp'] + df['Parch'] + 1
-
-# E. Asegurar que todo sea numérico para evitar errores en algoritmos como XGBoost
-df = df.astype(float)
-
-# 3. REESTRUCTURACIÓN PARA AWS BUOILT-IN XGBOOST
-
-# 3. REESTRUCTURACIÓN PARA AWS BUILT-IN XGBOOST
-# Aseguramos que 'Survived' es la primera columna
-if 'Survived' in df.columns:
-    cols = ['Survived'] + [col for col in df.columns if col != 'Survived']
-    df = df[cols]
-else:
-    print("Error: La columna 'Survived' no se encuentra en el dataset.")
 
 print("Shape of processed data is:", df.shape)
 
 
-# 4. DIVIDIR EL DATASET EN TRAIN, VALIDATION Y TEST
+# 3. DIVIDIR EL DATASET EN TRAIN, VALIDATION Y TEST
 
 print("Shape of data is:", df.shape)
-train, test = train_test_split(df, test_size=0.2)
-train, validation = train_test_split(train, test_size=0.2)
+train, test = train_test_split(df, test_size=0.2, random_state=42)
+train, validation = train_test_split(train, test_size=0.2, random_state=42)
+
+# Usamos .copy() para evitar SettingWithCopyWarning al modificar los subsets
+train = train.copy()
+validation = validation.copy()
+test = test.copy()
+
+# D. Imputar valores nulos (Missing values)
+# Calculamos los estadísticos SOLO sobre train para evitar data leakage
+# (no debe filtrarse información de validation/test a la imputación)
+age_median = train['Age'].median()
+embarked_mode = train['Embarked'].mode()[0] if 'Embarked' in train.columns else None
+
+# Rellenamos las edades nulas con la mediana de las edades (de train)
+for subset in (train, validation, test):
+    subset['Age'] = subset['Age'].fillna(age_median)
+
+# Rellenamos la tarifa nula (si la hubiera) con la mediana (de train)
+if 'Fare' in train.columns:
+    fare_median = train['Fare'].median()
+    for subset in (train, validation, test):
+        subset['Fare'] = subset['Fare'].fillna(fare_median)
+
+# Rellenamos el puerto de embarque nulo con el valor más frecuente (moda de train)
+if 'Embarked' in train.columns:
+    for subset in (train, validation, test):
+        subset['Embarked'] = subset['Embarked'].fillna(embarked_mode)
+
+# E. One-Hot Encoding para 'Embarked' (Convierte el puerto en columnas numéricas separadas)
+# Lo hacemos por subset y reindexamos validation/test a las columnas de train
+if 'Embarked' in train.columns:
+    train = pd.get_dummies(train, columns=['Embarked'], drop_first=True)
+    validation = pd.get_dummies(validation, columns=['Embarked'], drop_first=True)
+    test = pd.get_dummies(test, columns=['Embarked'], drop_first=True)
+    validation = validation.reindex(columns=train.columns, fill_value=0)
+    test = test.reindex(columns=train.columns, fill_value=0)
+
+# F. Asegurar que todo sea numérico para evitar errores en algoritmos como XGBoost
+train = train.astype(float)
+validation = validation.astype(float)
+test = test.astype(float)
+
+# 4. REESTRUCTURACIÓN PARA AWS BUILT-IN XGBOOST
+# Aseguramos que 'Survived' es la primera columna (en cada subset)
+if 'Survived' in train.columns:
+    cols = ['Survived'] + [col for col in train.columns if col != 'Survived']
+    train = train[cols]
+    validation = validation[cols]
+    test = test[cols]
+else:
+    print("Error: La columna 'Survived' no se encuentra en el dataset.")
 
 # 5. CREACIÓN DE DIRECCTORIOS
 
